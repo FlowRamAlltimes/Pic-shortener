@@ -3,7 +3,7 @@ This is universal tool which can work on any server. Programm shortcuts your ima
 
 ## How to use 
 
-Before using, you need to download backend service [HERE](https://github.com/FlowRamAlltimes/Image-shortener/releases/tag/0.1)
+Before using, you need to download backend service [HERE](https://github.com/FlowRamAlltimes/Image-shortener/releases/download/service-linux_x86_64/0.1)
 
 **GET QUERY**
 ```bash
