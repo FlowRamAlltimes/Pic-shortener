@@ -9,26 +9,26 @@ This is universal tool which can work on any server. Programm shortcuts your ima
 Before using, you need to download backend service [here](https://github.com/FlowRamAlltimes/Image-shortener/releases/download/0.2/service)
 
 **GET QUERY**
-```bash
+```
 curl "http://YOUR_IP:10000/images?hash=YOUR_HASH_GIVEN_AFTER_POST_QUERY&width=YOUR_WIDTH&quality=YOUR_QUALITY" --output FILE-NAME.jpg ## creates new shortcuted photo by your parameters 
 ```
 
 **POST QUERY** 
-```bash
+```
 curl -X POST -F "image=@$HOME/YOUR_PATH_TO_PICTURE" http://YOUR_IP:10000/images ## adds your photo into the server
 ```
 
 # How to use it on your server? 🫠
 ### Use scp to run it 24/7 and provide an oppeortunity to everybody who wants to use this app
 
-```bash
+```
 scp /path/to/local/file.txt user@192.168.1.100:/path/to/remote/folder/
 ## Set your URL or IP of VPS instead of 192.168.1.100
 ```
 
 Then just run it in [docker](https://www.docker.com), [systemd](https://systemd.io) or in any other way 🐧
 ### nohup
-```bash
+```
 nohup ./service &
 ## Logs will be in nohup.out 
 ```
