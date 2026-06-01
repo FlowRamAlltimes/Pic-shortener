@@ -14,3 +14,23 @@ curl "http://YOUR_IP:10000/images?hash=YOUR_HASH_GIVEN_AFTER_POST_QUERY&width=YO
 ```bash
 curl -X POST -F "image=@$HOME/YOUR_PATH_TO_PICTURE" http://YOUR_IP:10000/images
 ```
+
+# How to use it on your server?
+### Use scp to run it 24/7 and provide an oppeortunity to everybody who wants to use this app
+
+```bash
+scp /path/to/local/file.txt user@192.168.1.100:/path/to/remote/folder/
+## Set your URL or IP of VPS instead of 192.168.1.100
+```
+
+Then just run it in [docker](https://www.docker.com), [systemd](https://systemd.io) or in any other way
+### nohup
+```bash
+nohup ./service &
+## Logs will be in nohup.out 
+```
+
+# Can I connect my own client to this backend?
+```
+Yeah, absolutely but you need to use "image" as Multipart Form  
+```
