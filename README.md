@@ -8,14 +8,14 @@ This is universal tool which can work on any server. Programm shortcuts your ima
 
 Before using, you need to download backend service [here](https://github.com/FlowRamAlltimes/Image-shortener/releases/download/0.2/service)
 
-**GET QUERY**
+**GET QUERY** *creates new shortcuted photo by your parameters*
 ```
-curl "http://YOUR_IP:10000/images?hash=YOUR_HASH_GIVEN_AFTER_POST_QUERY&width=YOUR_WIDTH&quality=YOUR_QUALITY" --output FILE-NAME.jpg ## creates new shortcuted photo by your parameters 
+curl "http://YOUR_IP:10000/images?hash=YOUR_HASH_GIVEN_AFTER_POST_QUERY&width=YOUR_WIDTH&quality=YOUR_QUALITY" --output FILE-NAME.jpg 
 ```
 
-**POST QUERY** 
+**POST QUERY** *adds your photo into the server*
 ```
-curl -X POST -F "image=@$HOME/YOUR_PATH_TO_PICTURE" http://YOUR_IP:10000/images ## adds your photo into the server
+curl -X POST -F "image=@$HOME/YOUR_PATH_TO_PICTURE" http://YOUR_IP:10000/images 
 ```
 
 # How to use it on your server? 🫠
