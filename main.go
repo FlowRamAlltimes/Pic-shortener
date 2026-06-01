@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"pic-shortener/core"
@@ -15,6 +18,10 @@ import (
 	"sync"
 	"time"
 )
+
+type ctxKey string
+
+const requestIdKey ctxKey = "reqKeyString"
 
 var (
 	DB          *sql.DB
@@ -34,7 +41,7 @@ func main() {
 	defer DB.Close()
 
 	mu.Lock()
-	AlreadyDone, err = database.UploadMap()
+	AlreadyDone, err = database.UploadMap() // uploader starts
 	if err != nil {
 		log.Printf("Error while filling map %v\n", err)
 		return
@@ -45,9 +52,11 @@ func main() {
 
 	mux := http.NewServeMux()
 	server := &http.Server{
-		Handler:     mux,
-		Addr:        ":10000",
-		ReadTimeout: 10 * time.Second,
+		Handler:      Middleware(mux),
+		Addr:         ":10000",
+		ReadTimeout:  10 * time.Second,
+		IdleTimeout:  120 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
 	mux.HandleFunc("/", mainHandler)
 	mux.HandleFunc("/images", imageHandler)
@@ -62,7 +71,7 @@ func main() {
 func imageHandler(w http.ResponseWriter, r *http.Request) {
 	ip := r.RemoteAddr
 
-	log.Printf("[%s] We got new request: %v\n", ip, r.Body)
+	log.Printf("[%s] We got new request: %v\n", ip, r.Method)
 
 	if r.Method == http.MethodGet {
 		hash := r.URL.Query().Get("hash") // gets all data from get query
@@ -73,6 +82,7 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		queryForMap := fmt.Sprintf("%s:%s:%s", hash, quality, width)
 
+		mu.RLock()
 		val, exists := AlreadyDone[queryForMap]
 		if exists == true { // checks existing
 			foundPath = val
@@ -82,6 +92,7 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 			reference := fmt.Sprintf("storage/originals/%v.jpg", hash)
 			foundPath = reference
 		}
+		mu.RUnlock()
 
 		qual, err := strconv.Atoi(quality)
 		if err != nil {
@@ -110,13 +121,17 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		dstPath := fmt.Sprintf("%s_%vX%v.jpg", preDestPathCashed, width, quality)
 
+		var MediaErr *core.MediaError
+
 		err = core.ResizeJPEG(foundPath, dstPath, wid, qual)
 		if err == nil {
 			log.Printf("We made new cashed image: %v\n", dstPath)
-		} else {
-			log.Printf("ERR at resizing image %v\n", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		} else if err != nil {
+			if errors.As(err, &MediaErr) {
+				log.Printf("Logged for sys admin %s\n", MediaErr.Error())
+				http.Error(w, MediaErr.Message, MediaErr.Code)
+				return
+			}
 		}
 
 		http.ServeFile(w, r, dstPath) // sends file to the client
@@ -134,7 +149,6 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 		AlreadyDone[key] = dstPath
 		mu.Unlock()
 	} else if r.Method == http.MethodPost {
-		//
 		r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 
 		err = r.ParseMultipartForm(10 << 20)
@@ -161,7 +175,16 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		mw := io.MultiWriter(tempfile, hasher)
 
-		_, err = io.Copy(mw, network)
+		var mediaErr *core.MediaError
+
+		stream, err := core.Detector(network)
+		if errors.As(err, &mediaErr) {
+			log.Printf("ERR for admin: %v\n", mediaErr.Error())
+			http.Error(w, mediaErr.Message, mediaErr.Code)
+			return
+		}
+
+		_, err = io.Copy(mw, stream)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -188,9 +211,31 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Write([]byte("File has been saved successfully! HASH: " + hashString + "\n"))
+	} else {
+		log.Printf("[%s] 405\n", ip)
+		http.Error(w, "Method is not allowed!", http.StatusMethodNotAllowed)
+		return
 	}
 }
 
 func mainHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello, thats my API to optimize your photos")
+}
+
+func Middleware(nextFunc http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := r.RemoteAddr
+		start := time.Now().Round(time.Millisecond)
+
+		uniqueIdForCtx := fmt.Sprintf("REQ-%d", 1+rand.IntN(10000))
+
+		ctx := context.WithValue(r.Context(), requestIdKey, uniqueIdForCtx)
+
+		newReq := r.WithContext(ctx)
+
+		nextFunc.ServeHTTP(w, newReq)
+
+		result := time.Since(start)
+		log.Printf("[%s] [%v] %v ms\n", ip, uniqueIdForCtx, result)
+	})
 }
