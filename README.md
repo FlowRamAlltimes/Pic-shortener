@@ -1,5 +1,8 @@
 # Image-shortener
-This is universal tool which can work on any server. Programm shortcuts your image in any format (.png .jpg .jpeg) and doesn't lose picture's quality. You can append tool's possibilities with beautiful UI client in any browser. It's my first MVP project based on REST API. I hope ypu'll like it 
+This is universal tool which can work on any server. Programm shortcuts your image in any format (.png .jpg .jpeg) and doesn't lose picture's quality. You can append tool's possibilities with beautiful UI client in any browser. It's my first MVP project based on REST API. I hope you'll like it 
+
+<img width="961" height="432" alt="image" src="https://github.com/user-attachments/assets/6a7c3aba-8c46-4b16-800e-eb222de1c6d9" />
+
 
 ## How to use 
 
