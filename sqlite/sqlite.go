@@ -120,3 +120,4 @@ func UploadMap() (map[string]string, error) {
 
 	return resultMap, nil
 }
+
