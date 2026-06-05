@@ -29,7 +29,7 @@ func (e *MediaError) Error() string {
 	return fmt.Sprintf("[%s] %s", e.Op, e.Message)
 }
 
-func (e *MediaError) Unwarp() error {
+func (e *MediaError) Unwrap() error {
 	return e.Err
 }
 

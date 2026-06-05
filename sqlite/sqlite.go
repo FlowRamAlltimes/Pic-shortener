@@ -10,7 +10,7 @@ import (
 
 var DB *sql.DB
 
-func InitDBSQLite() (*sql.DB, error) {
+func InitDBSQLite(dbName string) (*sql.DB, error) {
 	var err error
 	InitQuery := `CREATE TABLE IF NOT EXISTS originals (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,7 +28,7 @@ func InitDBSQLite() (*sql.DB, error) {
 	FOREIGN KEY (original_id) REFERENCES original_id(id) ON DELETE CASCADE
 	);`
 
-	DB, err = sql.Open("sqlite", "main.db")
+	DB, err = sql.Open("sqlite", dbName)
 	if err != nil {
 		return nil, err
 	}
@@ -120,3 +120,4 @@ func UploadMap() (map[string]string, error) {
 
 	return resultMap, nil
 }
+

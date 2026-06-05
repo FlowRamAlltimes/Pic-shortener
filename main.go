@@ -11,12 +11,43 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"os/signal"
 	"pic-shortener/core"
 	database "pic-shortener/sqlite"
 	"strconv"
-	"strings"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"gopkg.in/yaml.v3"
+)
+
+type MainConfig struct {
+	Server   ServerConfig `yaml:"server"`
+	Database DBConfig     `yaml:"database"`
+}
+
+type ServerConfig struct {
+	Port  string        `yaml:"port"`
+	Idle  time.Duration `yaml:"idle"`
+	Read  time.Duration `yaml:"read"`
+	Write time.Duration `yaml:"write"`
+}
+
+type DBConfig struct {
+	DBName       string `yaml:"name"`
+	StoragePath  string `yaml:"originals_path"`
+	CachedPath   string `yaml:"cached_path"`
+	TempFilePath string `yaml:"temp_file_path"`
+}
+
+var (
+	Cfg  *MainConfig
+	Path string
 )
 
 type ctxKey string
@@ -24,17 +55,42 @@ type ctxKey string
 const requestIdKey ctxKey = "reqKeyString"
 
 var (
-	DB          *sql.DB
-	AlreadyDone map[string]string // it like map[hash:quality:width]filepath to use already cashed images
-	err         error
-	mu          sync.RWMutex
+	DB             *sql.DB
+	AlreadyDone    map[string]string // it like map[hash:quality:width]filepath to use already cashed images
+	err            error
+	mu             sync.RWMutex
+	cacheHitsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "pic_shortener_cached_hits_total",
+		Help: "counter when map AlreadyDone saved server resources",
+	})
+
+	requestDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "pic_shortener_request_duration_seconds",
+		Help:    "historgam of average time",
+		Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5},
+	})
 )
 
 func main() {
-	DB, err = database.InitDBSQLite()
+	quit := make(chan os.Signal, 1)
+
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	Cfg, err = UnparseYAML("config.yml")
+	if errors.Is(err, os.ErrNotExist) {
+		log.Printf("File does not exist! %v\n", err)
+		return
+	} else if err != nil {
+		log.Println(err)
+		return
+	}
+
+	var PrePath string = Cfg.Database.StoragePath
+	Path = PrePath
+
+	DB, err = database.InitDBSQLite(Cfg.Database.DBName)
 	if err != nil {
-		log.Printf("Initialazing error %v\n", err)
-		os.Exit(0)
+		log.Fatalf("ERR: %v\n", err)
 	} else {
 		log.Printf("Database runs successfully!\n")
 	}
@@ -52,26 +108,44 @@ func main() {
 
 	mux := http.NewServeMux()
 	server := &http.Server{
-		Handler:      Middleware(mux),
-		Addr:         ":10000",
-		ReadTimeout:  10 * time.Second,
-		IdleTimeout:  120 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Handler:      LogMiddleware(mux),
+		Addr:         Cfg.Server.Port,
+		ReadTimeout:  Cfg.Server.Read,
+		IdleTimeout:  Cfg.Server.Idle,
+		WriteTimeout: Cfg.Server.Write,
 	}
+
 	mux.HandleFunc("/", mainHandler)
 	mux.HandleFunc("/images", imageHandler)
+	mux.Handle("/metrics", promhttp.Handler())
 	log.Printf("Service runs: %s", server.Addr)
-	err = server.ListenAndServe()
-	if err != nil {
-		log.Printf("ERR %v\n", err)
-		return
+
+	go func() {
+		err = server.ListenAndServe()
+		if err != nil && err != http.ErrServerClosed {
+			log.Printf("ERR %v\n", err)
+			return
+		}
+	}()
+
+	<-quit
+
+	log.Printf("SIGNAL RECIEVED, WE ARE STOPPING THE SERVER\n")
+
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("SERVER HAS BEEN STOPPED BY SHUTDOWN: %v", err)
 	}
 }
 
 func imageHandler(w http.ResponseWriter, r *http.Request) {
 	ip := r.RemoteAddr
 
-	log.Printf("[%s] We got new request: %v\n", ip, r.Method)
+	reqID, _ := r.Context().Value(requestIdKey).(string)
+
+	log.Printf("[%s] [%s] We got new request: %v\n", ip, reqID, r.Method)
 
 	if r.Method == http.MethodGet {
 		hash := r.URL.Query().Get("hash") // gets all data from get query
@@ -85,8 +159,10 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 		mu.RLock()
 		val, exists := AlreadyDone[queryForMap]
 		if exists == true { // checks existing
+			cacheHitsTotal.Inc() // adds 1 to global prometheus counter
 			foundPath = val
 			http.ServeFile(w, r, foundPath)
+			mu.RUnlock()
 			return
 		} else {
 			reference := fmt.Sprintf("storage/originals/%v.jpg", hash)
@@ -96,28 +172,29 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		qual, err := strconv.Atoi(quality)
 		if err != nil {
+			log.Printf("[%s] [%s] typed data incorrectly\n", reqID, ip)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		wid, err := strconv.Atoi(width)
 		if err != nil {
+			log.Printf("[%s] [%s] typed data incorrectly\n", reqID, ip)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		original_id, err := database.GetOriginalData(hash)
 		if err != nil {
-			log.Printf("ERR at getting original id %v\n", err)
+			log.Printf("ERR at getting original id [%s] %v\n", reqID, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		id := strconv.Itoa(original_id)
 
-		newFoundPath := strings.SplitN(foundPath, ".", 2)
+		preDestPath := Cfg.Database.CachedPath
 
-		preDestPath := strings.SplitN(newFoundPath[0], "/", 2)
-		preDestPathCashed := fmt.Sprintf("%s/cashe/%s", preDestPath[0], hash)
+		preDestPathCashed := fmt.Sprintf("%s/%s", preDestPath, hash)
 
 		dstPath := fmt.Sprintf("%s_%vX%v.jpg", preDestPathCashed, width, quality)
 
@@ -128,7 +205,7 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("We made new cashed image: %v\n", dstPath)
 		} else if err != nil {
 			if errors.As(err, &MediaErr) {
-				log.Printf("Logged for sys admin %s\n", MediaErr.Error())
+				log.Printf("Logged for system admin [%s] %s\n", reqID, MediaErr.Error())
 				http.Error(w, MediaErr.Message, MediaErr.Code)
 				return
 			}
@@ -139,7 +216,7 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		err = database.SaveCashedAfterGetRequest(id, width, quality, dstPath, int(time.Now().Unix()))
 		if err != nil {
-			log.Printf("ERR at saving cashed data %v\n", err)
+			log.Printf("ERR at saving cashed data [%s] %v\n", reqID, err)
 			http.Error(w, "Image wasn't saved successfully\n", http.StatusInternalServerError)
 			return
 		}
@@ -153,12 +230,14 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		err = r.ParseMultipartForm(10 << 20)
 		if err != nil {
+			log.Printf("ERR at parsing Multipart Form [%s]\n", reqID)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		network, _, err := r.FormFile("image")
 		if err != nil {
+			log.Printf("ERR at forming network file, incorrect Multipart Form [%s] %v\n", reqID, err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -166,8 +245,9 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		hasher := sha256.New()
 
-		tempfile, err := os.Create("storage/originals/temp_upload.jpg")
+		tempfile, err := os.Create(Cfg.Database.TempFilePath)
 		if err != nil {
+			log.Printf("ERR at creating temp file [%s] %v\n", reqID, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -179,40 +259,43 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		stream, err := core.Detector(network)
 		if errors.As(err, &mediaErr) {
-			log.Printf("ERR for admin: %v\n", mediaErr.Error())
+			log.Printf("ERR for admin: [%s] %v\n", reqID, mediaErr.Error())
 			http.Error(w, mediaErr.Message, mediaErr.Code)
 			return
 		}
 
 		_, err = io.Copy(mw, stream)
 		if err != nil {
+			log.Printf("ERR while copied data [%s] %v\n", reqID, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		hashString := fmt.Sprintf("%x", hasher.Sum(nil))
 
-		fp := fmt.Sprintf("storage/originals/%s.jpg", hashString)
-		err = os.Rename("storage/originals/temp_upload.jpg", fp)
+		fp := fmt.Sprintf(Path+"/%s.jpg", hashString)
+		err = os.Rename(Cfg.Database.TempFilePath, fp)
 		if err != nil {
+			log.Printf("ERR at renaming temp file [%s] %v\n", reqID, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		err = database.SaveOriginalAfterPostRequest(hashString, fp, int(time.Now().Unix()))
 		if err == nil {
-			log.Printf("New picture: %s\n", fp)
+			log.Printf("New picture by [%s]: %s\n", reqID, fp)
 			mu.Lock()
 			AlreadyDone[hashString+":"+"original-quality"+":"+"original-width"] = fp
 			mu.Unlock()
 		} else {
+			log.Printf("ERR [%s] %v\n", reqID, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		w.Write([]byte("File has been saved successfully! HASH: " + hashString + "\n"))
 	} else {
-		log.Printf("[%s] 405\n", ip)
+		log.Printf("[%s] [%s] 405\n", reqID, ip)
 		http.Error(w, "Method is not allowed!", http.StatusMethodNotAllowed)
 		return
 	}
@@ -222,7 +305,7 @@ func mainHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello, thats my API to optimize your photos")
 }
 
-func Middleware(nextFunc http.Handler) http.Handler {
+func LogMiddleware(nextFunc http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := r.RemoteAddr
 		start := time.Now().Round(time.Millisecond)
@@ -233,9 +316,26 @@ func Middleware(nextFunc http.Handler) http.Handler {
 
 		newReq := r.WithContext(ctx)
 
+		w.Header().Set("X-Request-ID", uniqueIdForCtx)
+
 		nextFunc.ServeHTTP(w, newReq)
 
 		result := time.Since(start)
+
+		requestDuration.Observe(result.Seconds())
 		log.Printf("[%s] [%v] %v ms\n", ip, uniqueIdForCtx, result)
 	})
 }
+
+func UnparseYAML(filepath string) (*MainConfig, error) {
+	bytes, err := os.ReadFile(filepath)
+	if err != nil {
+		return nil, fmt.Errorf("ERR at parsing %s %w", filepath, err)
+	}
+
+	var Cfg *MainConfig
+
+	err = yaml.Unmarshal(bytes, &Cfg)
+	return Cfg, nil
+}
+
