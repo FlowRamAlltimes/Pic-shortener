@@ -43,6 +43,7 @@ type DBConfig struct {
 	StoragePath  string `yaml:"originals_path"`
 	CachedPath   string `yaml:"cached_path"`
 	TempFilePath string `yaml:"temp_file_path"`
+	LogFilePath  string `yaml:"app_logs_path"`
 }
 
 var (
@@ -84,6 +85,22 @@ func main() {
 		log.Println(err)
 		return
 	}
+
+	logFile, err := os.OpenFile(Cfg.Database.LogFilePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0666)
+	if errors.Is(err, os.ErrNotExist) {
+		log.Printf("ERR LOG FILE DOESN'T EXIST %v\n", err)
+		return
+	} else if err != nil {
+		log.Println("ERR at opening log file", err)
+		return
+	}
+	defer logFile.Close()
+
+	mw := io.MultiWriter(os.Stdout, logFile)
+
+	log.SetOutput(mw)
+
+	log.Printf("Log system is running now\n")
 
 	var PrePath string = Cfg.Database.StoragePath
 	Path = PrePath
@@ -203,7 +220,7 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 		err = core.ResizeJPEG(foundPath, dstPath, wid, qual)
 		if err == nil {
 			log.Printf("We made new cashed image: %v\n", dstPath)
-		} else if err != nil {
+		} else {
 			if errors.As(err, &MediaErr) {
 				log.Printf("Logged for system admin [%s] %s\n", reqID, MediaErr.Error())
 				http.Error(w, MediaErr.Message, MediaErr.Code)
@@ -338,4 +355,3 @@ func UnparseYAML(filepath string) (*MainConfig, error) {
 	err = yaml.Unmarshal(bytes, &Cfg)
 	return Cfg, nil
 }
-
