@@ -1,0 +1,35 @@
+services:
+  pic-backend:
+    build: .
+    
+    container_name: pic-service
+    
+    ports:
+      - 10000:10000
+
+    volumes:
+      - ./main.db:/app/main.db
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+  prometheus:
+
+    image: prom/prometheus:latest
+    container_name: prom-service
+
+    ports:
+      - 9090:9090
+
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana-service
+
+    ports:
+      - 3000:3000
+
+    volumes:
+      - grafana-storage:/var/lib/grafana
+volumes:
+  grafana-storage:
