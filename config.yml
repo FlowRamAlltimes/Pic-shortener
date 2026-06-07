@@ -1,10 +1,11 @@
 server:
   port: ":10000"
   idle: 120s
-  read: 10s
   write: 10s
+  read: 10s
 database:
   name: "main.db"
   originals_path: "storage/originals"
-  cached_path: "storage/cached"
+  cached_path: "storage/caсhe"
   temp_file_path: "storage/originals/temp_file.jpg"
+  app_logs_path: "logs/app.log"

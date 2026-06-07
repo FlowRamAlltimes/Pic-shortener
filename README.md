@@ -1,61 +1,87 @@
-# PicShortener API
+# Pic-shortener
 
-A high-performance Go microservice designed for dynamic image optimization, resizing, and on-the-fly caching. Built with a strong focus on system reliability, memory-efficient I/O operations, and comprehensive observability.
+A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG images, equipped with a full monitoring stack (Prometheus + Grafana).
 
-# Arch
+## Arch
 
-<img width="961" height="432" alt="image" src="https://github.com/user-attachments/assets/6a7c3aba-8c46-4b16-800e-eb222de1c6d9" />
+<img width="1118" height="660" alt="image" src="https://github.com/user-attachments/assets/8b2417e2-a486-4aea-9475-d952ed8412f0" />
 
-# Technology Stack
 
-* GoLang v1.26.3
-* SQL Driver `modernc.org/sqlite`
-* YAML Parsing `gopkg.in/yaml.v3`
-* Image Processing `golang.org/x/image/draw`
-* Monitoring powered by `github.com/prometheus/client_golang/prometheus`
+## Features
 
-## How to use ✨
+- **Image Upload:** Upload original images via `POST` requests.
+- **Dynamic Resizing:** Request images with custom width and quality parameters via `GET` requests.
+- **In-Memory Caching:** Fast response times for duplicate requests using an in-memory cache with thread-safe `sync.RWMutex`.
+- **Monitoring:** Built-in Prometheus metrics handler tracking Go runtime states and custom application behavior (cache hits and request durations).
 
-Before using, you need to download backend service [here](https://github.com/FlowRamAlltimes/Image-shortener/releases/download/0.3/service)
+## Tech Stack
 
-Configure `config.yml`:
-```YAML
-server:
-  port: ":10000"
-  idle: 120s
-  read: 10s
-  write: 10s
-database:
-  name: "main.db"
-  originals_path: "storage/originals"
-  cached_path: "storage/cached"
-  temp_file_path: "storage/originals/temp_file.jpg"
+- **Backend:** Go (Golang)
+- **Database:** SQLite
+- **Monitoring:** Prometheus & Grafana
+- **Infrastructure:** Docker & Docker Compose
+
+## Getting Started
+
+### Prerequisites
+
+Make sure you have Docker and Docker Compose installed on your system.
+
+### Running the Project
+
+1. Clone the repository and navigate to the project directory.
+2. Start the entire stack using Docker Compose:
+
+```bash
+sudo docker compose up --build -d
 ```
 
-**GET QUERY** *creates newly optimized photo by your parameters*
-```
-curl "http://YOUR_IP:10000/images?hash=YOUR_HASH_GIVEN_AFTER_POST_QUERY&width=YOUR_WIDTH&quality=YOUR_QUALITY" --output FILE-NAME.jpg 
-```
+This command builds the Go application and starts all services in the background.
+Service Ports
 
-**POST QUERY** *adds your photo into the server*
-```
-curl -X POST -F "image=@$HOME/YOUR_PATH_TO_PICTURE" http://YOUR_IP:10000/images 
-```
+Once running, the following services will be available:
 
-# How to use it on your server? 🫠
-### Use scp to run it 24/7 and provide an opportunity to everybody who wants to use this app
+    Go Backend API: http://localhost:10000
 
-```
-scp /path/to/local/service user@192.168.1.100:/path/to/remote/folder/
-## Set your URL or IP of VPS instead of 192.168.1.100
-```
+    Prometheus UI: http://localhost:9090
 
-Then just run it in [docker](https://www.docker.com), [systemd](https://systemd.io) or in any other way 🐧
-### nohup
-```
-nohup ./service &
-## Logs will be in nohup.out 
-```
+    Grafana Dashboards: http://localhost:3000
 
+API Endpoints
+1. Upload Image
 
-## Good Luck 🤩
+    URL: /images
+
+    Method: POST
+
+    Content-Type: multipart/form-data
+
+    Body: image (file)
+
+    Response: Success message with the image file HASH.
+
+2. Get / Resize Image
+
+    URL: /images
+
+    Method: GET
+
+    Query Parameters:
+
+        hash: The unique hash of the uploaded image.
+
+        width: Target width in pixels.
+
+        quality: JPEG quality (1-100).
+
+    Response: The processed JPEG image.
+
+3. Metrics
+
+    URL: /metrics
+
+    Method: GET
+
+    Description: Exposes standard Go runtime metrics and custom application metrics for Prometheus scraping.
+# Grafana Result
+<img width="1524" height="818" alt="image" src="https://github.com/user-attachments/assets/e99c6f09-fa1f-471c-a187-8bb58d98d735" />
