@@ -1,41 +1,87 @@
-# Image-shortener 📸
-This is universal tool which can work on any server. Programm shortcuts your image in any format (.png .jpg .jpeg) and doesn't lose picture's quality. You can append tool's possibilities with beautiful UI client in any browser. It's my first MVP project based on REST API. I hope you'll like it 🌛
+# Pic-shortener
 
-<img width="961" height="432" alt="image" src="https://github.com/user-attachments/assets/6a7c3aba-8c46-4b16-800e-eb222de1c6d9" />
+A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG images, equipped with a full monitoring stack (Prometheus + Grafana).
+
+## Arch
+
+<img width="1118" height="660" alt="image" src="https://github.com/user-attachments/assets/8b2417e2-a486-4aea-9475-d952ed8412f0" />
 
 
-## How to use ✨
+## Features
 
-Before using, you need to download backend service [here](https://github.com/FlowRamAlltimes/Image-shortener/releases/download/0.2/service)
+- **Image Upload:** Upload original images via `POST` requests.
+- **Dynamic Resizing:** Request images with custom width and quality parameters via `GET` requests.
+- **In-Memory Caching:** Fast response times for duplicate requests using an in-memory cache with thread-safe `sync.RWMutex`.
+- **Monitoring:** Built-in Prometheus metrics handler tracking Go runtime states and custom application behavior (cache hits and request durations).
 
-**GET QUERY** *creates new shortcuted photo by your parameters*
-```
-curl "http://YOUR_IP:10000/images?hash=YOUR_HASH_GIVEN_AFTER_POST_QUERY&width=YOUR_WIDTH&quality=YOUR_QUALITY" --output FILE-NAME.jpg 
-```
+## Tech Stack
 
-**POST QUERY** *adds your photo into the server*
-```
-curl -X POST -F "image=@$HOME/YOUR_PATH_TO_PICTURE" http://YOUR_IP:10000/images 
-```
+- **Backend:** Go (Golang)
+- **Database:** SQLite
+- **Monitoring:** Prometheus & Grafana
+- **Infrastructure:** Docker & Docker Compose
 
-# How to use it on your server? 🫠
-### Use scp to run it 24/7 and provide an opportunity to everybody who wants to use this app
+## Getting Started
 
-```
-scp /path/to/local/file.txt user@192.168.1.100:/path/to/remote/folder/
-## Set your URL or IP of VPS instead of 192.168.1.100
-```
+### Prerequisites
 
-Then just run it in [docker](https://www.docker.com), [systemd](https://systemd.io) or in any other way 🐧
-### nohup
-```
-nohup ./service &
-## Logs will be in nohup.out 
-```
+Make sure you have Docker and Docker Compose installed on your system.
 
-# Can I connect my own client to this backend? 🙃
-```
-Yeah, absolutely but you need to use "image" as Multipart Form  
+### Running the Project
+
+1. Clone the repository and navigate to the project directory.
+2. Start the entire stack using Docker Compose:
+
+```bash
+sudo docker compose up --build -d
 ```
 
-## Good Luck 🤩
+This command builds the Go application and starts all services in the background.
+Service Ports
+
+Once running, the following services will be available:
+
+    Go Backend API: http://localhost:10000
+
+    Prometheus UI: http://localhost:9090
+
+    Grafana Dashboards: http://localhost:3000
+
+API Endpoints
+1. Upload Image
+
+    URL: /images
+
+    Method: POST
+
+    Content-Type: multipart/form-data
+
+    Body: image (file)
+
+    Response: Success message with the image file HASH.
+
+2. Get / Resize Image
+
+    URL: /images
+
+    Method: GET
+
+    Query Parameters:
+
+        hash: The unique hash of the uploaded image.
+
+        width: Target width in pixels.
+
+        quality: JPEG quality (1-100).
+
+    Response: The processed JPEG image.
+
+3. Metrics
+
+    URL: /metrics
+
+    Method: GET
+
+    Description: Exposes standard Go runtime metrics and custom application metrics for Prometheus scraping.
+# Grafana Result
+<img width="1524" height="818" alt="image" src="https://github.com/user-attachments/assets/e99c6f09-fa1f-471c-a187-8bb58d98d735" />
