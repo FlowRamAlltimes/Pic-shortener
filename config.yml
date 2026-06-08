@@ -4,8 +4,12 @@ server:
   write: 10s
   read: 10s
 database:
-  name: "main.db"
   originals_path: "storage/originals"
-  cached_path: "storage/caсhe"
+  cached_path: "storage/cashe"
   temp_file_path: "storage/originals/temp_file.jpg"
   app_logs_path: "logs/app.log"
+postgres:
+  name: "pic_shortener_db"
+  host: "postgres-db"
+  password: "super_secret_password_123"
+  user: "pic-admin"
