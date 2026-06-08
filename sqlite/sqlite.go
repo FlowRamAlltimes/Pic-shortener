@@ -1,92 +1,140 @@
 package database
 
 import (
-	"database/sql"
+	"context"
 	"fmt"
 	"log"
 
-	_ "modernc.org/sqlite"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var DB *sql.DB
+type DBError struct {
+	Op      string
+	Code    int
+	Message string
+	Err     error
+}
 
-func InitDBSQLite(dbName string) (*sql.DB, error) {
+func (e *DBError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("[%s] %s %v", e.Op, e.Message, e.Err)
+	}
+	return fmt.Sprintf("[%s] %s", e.Op, e.Message)
+}
+
+func (e *DBError) Unwrap() error {
+	return e.Err
+}
+
+var DB *pgxpool.Pool
+
+var connStr = "postgres://pic_admin:super_secret_password_123@localhost:5432/pic_shortener_db?sslmode=disable"
+
+func InitDBSQLite(ctx context.Context, user, password, host, name string) (*pgxpool.Pool, error) {
 	var err error
 	InitQuery := `CREATE TABLE IF NOT EXISTS originals (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	hash TEXT UNIQUE NOT NULL,
-	filepath TEXT NOT NULL,
+	id SERIAL PRIMARY KEY,
+	hash VARCHAR(64) NOT NULL UNIQUE,
+	filepath VARCHAR(255) NOT NULL,
 	ts INTEGER
 	);`
 	SecondInitQuery := `CREATE TABLE IF NOT EXISTS cashed(
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	id SERIAL PRIMARY KEY,
 	original_id INTEGER NOT NULL,
 	width INTEGER NOT NULL,
 	quality INTEGER NOT NULL,
-	filepath TEXT NOT NULL,
+	filepath VARCHAR(255) NOT NULL,
 	last_access_at INTEGER,
-	FOREIGN KEY (original_id) REFERENCES original_id(id) ON DELETE CASCADE
+	FOREIGN KEY (original_id) REFERENCES originals(id) ON DELETE CASCADE
 	);`
 
-	DB, err = sql.Open("sqlite", dbName)
+	conn := fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable", user, password, host, name)
+
+	fmt.Printf("Connection link: %s\n", conn)
+
+	DB, err = pgxpool.New(ctx, conn)
 	if err != nil {
-		return nil, err
+		return nil, &DBError{
+			Op:      "Creating New Database",
+			Code:    400,
+			Message: "Might be that you've used incorrect data in .env file",
+			Err:     err,
+		}
 	}
 
-	_, err = DB.Exec(InitQuery)
+	_, err = DB.Exec(ctx, InitQuery)
 	if err != nil {
-		return nil, err
+		return nil, &DBError{
+			Op:      "Database Initialization #1",
+			Code:    400,
+			Message: "ERR at DB exec type your REQ-ID to our support",
+			Err:     err,
+		}
 	}
 
-	_, err = DB.Exec(SecondInitQuery)
+	_, err = DB.Exec(ctx, SecondInitQuery)
 	if err != nil {
-		return nil, err
+		return nil, &DBError{
+			Op:      "Database Initialization #2",
+			Code:    400,
+			Message: "ERR at DB exec type your REQ-ID to our support",
+			Err:     err,
+		}
 	}
 
 	return DB, nil
 }
 
-func SaveOriginalAfterPostRequest(hash, filepath string, ts int) error {
-	OriginalQuery := `INSERT INTO originals(hash, filepath, ts) VALUES(?, ?, ?);`
+func SaveOriginalAfterPostRequest(ctx context.Context, hash, filepath string, ts int) error {
+	OriginalQuery := `INSERT INTO originals(hash, filepath, ts) VALUES($1, $2, $3);`
 
-	_, err := DB.Exec(OriginalQuery, hash, filepath, ts)
+	_, err := DB.Exec(ctx, OriginalQuery, hash, filepath, ts)
 	if err != nil {
 		log.Printf("Database exec error at saving original image\n")
-		return err
+		return &DBError{
+			Op:      "Database Exec After Post Req",
+			Code:    500,
+			Message: "ERR at DB exec type your REQ-ID to our support",
+			Err:     err,
+		}
 	}
 	return nil
 }
 
-func SaveCashedAfterGetRequest(id, width, quality string, filepath string, last int) error {
-	CashQuery := `INSERT INTO cashed(original_id, width, quality, filepath, last_access_at) VALUES(?, ?, ?, ?, ?);`
+func SaveCashedAfterGetRequest(ctx context.Context, id, width, quality string, filepath string, last int) error {
+	CashQuery := `INSERT INTO cashed(original_id, width, quality, filepath, last_access_at) VALUES($1, $2, $3, $4, $5);`
 
-	stmt, err := DB.Prepare(CashQuery)
+	_, err := DB.Exec(ctx, CashQuery, id, width, quality, filepath, last)
 	if err != nil {
-		return err
+		return &DBError{
+			Op:      "Database Exec After Get Req",
+			Code:    500,
+			Message: "ERR at DB exec type your REQ-ID to our support",
+			Err:     err,
+		}
 	}
-
-	_, err = stmt.Exec(id, width, quality, filepath, last)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
-func GetOriginalData(hash string) (int, error) {
-	orig_Query := `SELECT id FROM originals WHERE hash = ?;`
+func GetOriginalData(ctx context.Context, hash string) (int, error) {
+	orig_Query := `SELECT id FROM originals WHERE hash = $1;`
 	var id int
 
-	row := DB.QueryRow(orig_Query, hash)
+	row := DB.QueryRow(ctx, orig_Query, hash)
 	err := row.Scan(&id)
 	if err != nil {
-		return -1, err
+		return -1, &DBError{
+			Op:      "Getting data from Query Row",
+			Code:    500,
+			Message: "ERR at DB exec type your REQ-ID to our support",
+			Err:     err,
+		}
 	}
 
 	return id, nil
 }
 
-func UploadMap() (map[string]string, error) {
+func UploadMap(ctx context.Context) (map[string]string, error) {
 
 	resultMap := make(map[string]string)
 
@@ -94,7 +142,7 @@ func UploadMap() (map[string]string, error) {
 	FROM cashed c
 	JOIN originals o ON c.original_id = o.id;`
 
-	rows, err := DB.Query(queryForData)
+	rows, err := DB.Query(ctx, queryForData)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +158,12 @@ func UploadMap() (map[string]string, error) {
 
 		err = rows.Scan(&hash, &quality, &width, &filepath)
 		if err != nil {
-			return nil, err
+			return nil, &DBError{
+				Op:      "Scanning Rows",
+				Code:    400,
+				Message: "ERR at getting info for you, call our support with your REQ-ID",
+				Err:     err,
+			}
 		}
 
 		key := fmt.Sprintf("%s:%v:%v", hash, quality, width)
@@ -120,4 +173,3 @@ func UploadMap() (map[string]string, error) {
 
 	return resultMap, nil
 }
-
