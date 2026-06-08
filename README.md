@@ -17,7 +17,7 @@ A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG 
 ## Tech Stack
 
 - **Backend:** Go (Golang)
-- **Database:** SQLite
+- **Database:** PostgreSQL
 - **Monitoring:** Prometheus & Grafana
 - **Infrastructure:** Docker & Docker Compose
 
