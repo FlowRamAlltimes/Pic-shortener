@@ -84,4 +84,5 @@ API Endpoints
 
     Description: Exposes standard Go runtime metrics and custom application metrics for Prometheus scraping.
 # Grafana Result
-<img width="1524" height="818" alt="image" src="https://github.com/user-attachments/assets/e99c6f09-fa1f-471c-a187-8bb58d98d735" />
+<img width="1855" height="1036" alt="image" src="https://github.com/user-attachments/assets/30789ac2-9cf5-4a49-b6f5-3f4e29803def" />
+
