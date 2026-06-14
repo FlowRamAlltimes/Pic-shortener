@@ -1,6 +1,6 @@
 # Pic-shortener
 
-A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG, PNG and WebP images, equipped with a full monitoring stack (Prometheus + Grafana).
+A simple stateless REST API built in Go for uploading, dynamic resizing, and caching JPEG, PNG and WebP images, equipped with a full monitoring stack (Prometheus + Grafana).
 
 ## Arch
 
@@ -12,6 +12,7 @@ A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG,
 - **Dynamic Resizing:** Request images with custom width and quality parameters via `GET` requests.
 - **In-Memory Caching:** Fast response times for duplicate requests using an in-memory cache with thread-safe `sync.RWMutex`.
 - **Monitoring:** Built-in Prometheus metrics handler tracking Go runtime states and custom application behavior (cache hits and request durations).
+- **Storage:** S3 storage which provides the possibility to make simple CDN service and group some services
 
 ## Tech Stack
 
