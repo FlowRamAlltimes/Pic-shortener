@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -35,7 +34,7 @@ func InitDBSQLite(ctx context.Context, user, password, host, name string) (*pgxp
 	InitQuery := `CREATE TABLE IF NOT EXISTS originals (
 	id SERIAL PRIMARY KEY,
 	hash VARCHAR(64) NOT NULL UNIQUE,
-	filepath VARCHAR(255) NOT NULL,
+	format VARCHAR(10) NOT NULL,
 	ts INTEGER
 	);`
 	SecondInitQuery := `CREATE TABLE IF NOT EXISTS cashed(
@@ -43,7 +42,8 @@ func InitDBSQLite(ctx context.Context, user, password, host, name string) (*pgxp
 	original_id INTEGER NOT NULL,
 	width INTEGER NOT NULL,
 	quality INTEGER NOT NULL,
-	filepath VARCHAR(255) NOT NULL,
+	filepath VARCHAR(256) NOT NULL,
+	format VARCHAR(10) NOT NULL,
 	last_access_at INTEGER,
 	FOREIGN KEY (original_id) REFERENCES originals(id) ON DELETE CASCADE
 	);`
@@ -85,12 +85,11 @@ func InitDBSQLite(ctx context.Context, user, password, host, name string) (*pgxp
 	return DB, nil
 }
 
-func SaveOriginalAfterPostRequest(ctx context.Context, hash, filepath string, ts int) error {
-	OriginalQuery := `INSERT INTO originals(hash, filepath, ts) VALUES($1, $2, $3);`
+func SaveOriginalAfterPostRequest(ctx context.Context, hash, format string, ts int) error {
+	OriginalQuery := `INSERT INTO originals(hash, format, ts) VALUES($1, $2, $3);`
 
-	_, err := DB.Exec(ctx, OriginalQuery, hash, filepath, ts)
+	_, err := DB.Exec(ctx, OriginalQuery, hash, format, ts)
 	if err != nil {
-		log.Printf("Database exec error at saving original image\n")
 		return &DBError{
 			Op:      "Database Exec After Post Req",
 			Code:    500,
@@ -101,10 +100,10 @@ func SaveOriginalAfterPostRequest(ctx context.Context, hash, filepath string, ts
 	return nil
 }
 
-func SaveCashedAfterGetRequest(ctx context.Context, id, width, quality string, filepath string, last int) error {
-	CashQuery := `INSERT INTO cashed(original_id, width, quality, filepath, last_access_at) VALUES($1, $2, $3, $4, $5);`
+func SaveCashedAfterGetRequest(ctx context.Context, id, width, quality, filepath, format string, last int) error {
+	CashQuery := `INSERT INTO cashed(original_id, width, quality, filepath, format, last_access_at) VALUES($1, $2, $3, $4, $5, $6);`
 
-	_, err := DB.Exec(ctx, CashQuery, id, width, quality, filepath, last)
+	_, err := DB.Exec(ctx, CashQuery, id, width, quality, filepath, format, last)
 	if err != nil {
 		return &DBError{
 			Op:      "Database Exec After Get Req",
@@ -138,13 +137,18 @@ func UploadMap(ctx context.Context) (map[string]string, error) {
 
 	resultMap := make(map[string]string)
 
-	queryForData := `SELECT o.hash, c.quality, c.width, c.filepath
+	queryForData := `SELECT o.hash, c.quality, c.width, c.filepath, c.format
 	FROM cashed c
 	JOIN originals o ON c.original_id = o.id;`
 
 	rows, err := DB.Query(ctx, queryForData)
 	if err != nil {
-		return nil, err
+		return nil, &DBError{
+			Op:      "Taking rows for filling maps",
+			Code:    500,
+			Message: "Unexpected error, tell your REQ-ID to our support",
+			Err:     err,
+		}
 	}
 	defer rows.Close()
 
@@ -153,10 +157,11 @@ func UploadMap(ctx context.Context) (map[string]string, error) {
 			hash     string
 			quality  int
 			width    int
+			format   string
 			filepath string
 		)
 
-		err = rows.Scan(&hash, &quality, &width, &filepath)
+		err = rows.Scan(&hash, &quality, &width, &filepath, &format)
 		if err != nil {
 			return nil, &DBError{
 				Op:      "Scanning Rows",
@@ -166,10 +171,28 @@ func UploadMap(ctx context.Context) (map[string]string, error) {
 			}
 		}
 
-		key := fmt.Sprintf("%s:%v:%v", hash, quality, width)
+		key := fmt.Sprintf("%s_%v_%v_%v", hash, width, quality, format)
 
 		resultMap[key] = filepath
 	}
 
 	return resultMap, nil
+}
+
+func GetFormat(ctx context.Context, id string) (string, error) {
+	var format string
+	Query := `SELECT format FROM cached WHERE id = $1`
+	row := DB.QueryRow(ctx, Query, id)
+
+	err := row.Scan(&format)
+	if err != nil {
+		return "", &DBError{
+			Op:      "Taking format",
+			Code:    500,
+			Message: "Unexpected error, tell your REQ-ID to our support",
+			Err:     err,
+		}
+	}
+
+	return format, nil
 }
