@@ -1,6 +1,6 @@
 # Pic-shortener
 
-A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG images, equipped with a full monitoring stack (Prometheus + Grafana).
+A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG, PNG and WebP images, equipped with a full monitoring stack (Prometheus + Grafana).
 
 ## Arch
 
@@ -20,6 +20,7 @@ A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG 
 - **Database:** PostgreSQL
 - **Monitoring:** Prometheus & Grafana
 - **Infrastructure:** Docker & Docker Compose
+- **Storage:** MinIO S3 API
 
 ## Getting Started
 
@@ -43,9 +44,15 @@ Once running, the following services will be available:
 
     Go Backend API: http://localhost:10000
 
+    PostgeSQL Database: http://localhost:5432
+
     Prometheus UI: http://localhost:9090
 
     Grafana Dashboards: http://localhost:3000
+
+    MinIO Storage Client: http://localhost:9000
+
+    MinIO Storage UI: http://localhost:9001
 
 API Endpoints
 1. Upload Image
@@ -68,21 +75,24 @@ API Endpoints
 
     Query Parameters:
 
-        hash: The unique hash of the uploaded image.
+   * hash: The unique hash of the uploaded image.
 
-        width: Target width in pixels.
+   * width: Target width in pixels.
 
-        quality: JPEG quality (1-100).
+   * quality: JPEG quality (1-100).
 
-    Response: The processed JPEG image.
+   * format: webp, jpeg or png
 
-3. Metrics
+    Response: The processed WebP, PNG or JPEG image.
+
+4. Metrics
 
     URL: /metrics
 
     Method: GET
 
     Description: Exposes standard Go runtime metrics and custom application metrics for Prometheus scraping.
-# Grafana Result
-<img width="1855" height="1036" alt="image" src="https://github.com/user-attachments/assets/30789ac2-9cf5-4a49-b6f5-3f4e29803def" />
+# Grafana Result Example
+<img width="1849" height="1029" alt="image" src="https://github.com/user-attachments/assets/befebe59-e1b5-49fa-b630-6f5c77af96e2" />
+
 
