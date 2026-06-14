@@ -2,17 +2,21 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"image/jpeg"
 	_ "image/jpeg"
+	"image/png"
 	_ "image/png"
 	"io"
-	"log"
 	"net/http"
-	"os"
 
+	"github.com/chai2010/webp"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"golang.org/x/image/draw"
+	_ "golang.org/x/image/webp"
 )
 
 type MediaError struct {
@@ -33,9 +37,9 @@ func (e *MediaError) Unwrap() error {
 	return e.Err
 }
 
-func ResizeJPEG(scrPath, dstPath string, width, quality int) error {
+func ResizeImage(ctx context.Context, scrPath, object, OrigBucket string, width, quality int, minioClient *minio.Client, format string) ([]byte, string, error) {
 	if width > 2880 {
-		return &MediaError{
+		return nil, "", &MediaError{
 			Op:      "Resize new image",
 			Code:    400,
 			Message: "Image resolution limit exceeded! Max width is 2880px",
@@ -43,12 +47,12 @@ func ResizeJPEG(scrPath, dstPath string, width, quality int) error {
 		}
 	}
 
-	file, err := os.Open(scrPath)
+	file, err := minioClient.GetObject(ctx, OrigBucket, object, minio.GetObjectOptions{})
 	if err != nil {
-		return &MediaError{
-			Op:      "Open filepath",
-			Code:    404,
-			Message: "File wasn't opened due to invalid name",
+		return nil, "", &MediaError{
+			Op:      "Data transfer",
+			Code:    500,
+			Message: "Unexpected error, tell your REQ-ID to our support",
 			Err:     err,
 		}
 	}
@@ -56,7 +60,7 @@ func ResizeJPEG(scrPath, dstPath string, width, quality int) error {
 
 	srcImg, _, err := image.Decode(file)
 	if err != nil {
-		return &MediaError{
+		return nil, "", &MediaError{
 			Op:      "Decoding file",
 			Code:    400,
 			Message: "The image may not be decodable due to damage or an incorrect structure",
@@ -74,40 +78,64 @@ func ResizeJPEG(scrPath, dstPath string, width, quality int) error {
 
 	draw.BiLinear.Scale(dstImg, dstImg.Bounds(), srcImg, srcImg.Bounds(), draw.Over, nil)
 
-	cacheFile, err := os.Create(dstPath)
-	if err != nil {
-		return &MediaError{
-			Op:      "Creating cache file",
-			Code:    500,
-			Message: "Creating error",
-			Err:     err,
-		}
-	}
-	defer cacheFile.Close()
-
-	options := &jpeg.Options{
+	jpegOptions := &jpeg.Options{
 		Quality: quality,
 	}
 
-	err = jpeg.Encode(cacheFile, dstImg, options)
-	if err != nil {
-		log.Printf("Encoding error %v\n", err)
-		return &MediaError{
-			Op:   "Encoding data into cache file",
-			Code: 400,
-			Err:  err,
+	webpOptions := &webp.Options{
+		Quality: float32(quality),
+	}
+
+	var buf bytes.Buffer
+
+	switch format {
+	case "jpeg":
+		err = jpeg.Encode(&buf, dstImg, jpegOptions) // writes data in buffer from dstImg
+		if err != nil {
+			return nil, "", &MediaError{
+				Op:   "Encoding data into cache file",
+				Code: 400,
+				Err:  err,
+			}
+		}
+	case "png":
+		err = png.Encode(&buf, dstImg) // writes data in buffer from dstImg
+		if err != nil {
+			return nil, "", &MediaError{
+				Op:      "Encoding data into cache file",
+				Code:    400,
+				Message: "Unexpected error, tell your REQ-ID to our support",
+				Err:     err,
+			}
+		}
+	case "webp":
+		err = webp.Encode(&buf, dstImg, webpOptions) // writes data in buffer from dstImg
+		if err != nil {
+			return nil, "", &MediaError{
+				Op:      "Encoding data into cache file",
+				Code:    400,
+				Message: "Unexpected error, tell your REQ-ID to our support",
+				Err:     err,
+			}
+		}
+	default:
+		return nil, "", &MediaError{
+			Op:      "Encoding data",
+			Code:    400,
+			Message: "Unexpected error, tell your REQ-ID to our support",
+			Err:     nil,
 		}
 	}
 
-	return nil
+	return buf.Bytes(), format, nil
 }
 
-func Detector(Body io.Reader) (io.Reader, error) {
+func Detector(Body io.Reader) (io.Reader, string, error) {
 	buf := make([]byte, 512)
 
 	_, err := io.ReadFull(Body, buf)
 	if err != nil {
-		return nil, &MediaError{
+		return nil, "", &MediaError{
 			Op:      "Reading file header",
 			Code:    400,
 			Message: "Failed to read file header",
@@ -116,16 +144,61 @@ func Detector(Body io.Reader) (io.Reader, error) {
 	}
 
 	fileType := http.DetectContentType(buf)
-	if fileType != "image/jpeg" && fileType != "image/png" {
-		return nil, &MediaError{
+	if fileType != "image/jpeg" && fileType != "image/png" && fileType != "image/webp" {
+		return nil, "", &MediaError{
 			Op:      "Detecting file type",
 			Code:    400,
 			Message: "Incorrect file type!",
 			Err:     nil,
 		}
 	}
-
 	stream := io.MultiReader(bytes.NewReader(buf), Body)
 
-	return stream, nil
+	return stream, fileType, nil
+}
+
+func InitMinIO(ctx context.Context, CachedBucket, OriginalBucket string, endpoint string, accessKeyID string, secretAccessKey string, useSec bool) (*minio.Client, error) {
+
+	minioClient, err := minio.New(endpoint, &minio.Options{
+		Secure: useSec,
+		Creds:  credentials.NewStaticV4(accessKeyID, secretAccessKey, ""),
+	})
+
+	if err != nil {
+		return nil, &MediaError{
+			Op:      "Creating new minIO client",
+			Code:    500,
+			Message: "ERR, tell your REQ-ID code to our support",
+			Err:     err,
+		}
+	}
+
+	bucketOpts := minio.MakeBucketOptions{}
+
+	res, err := minioClient.BucketExists(ctx, CachedBucket)
+	if err != nil {
+		return nil, &MediaError{
+			Op:      "Creating new minIO buckets [cached]",
+			Code:    500,
+			Message: "ERR, tell your REQ-ID code to our support",
+			Err:     err,
+		}
+	}
+	if res == false {
+		minioClient.MakeBucket(ctx, CachedBucket, bucketOpts)
+	}
+
+	res, err = minioClient.BucketExists(ctx, OriginalBucket)
+	if err != nil {
+		return nil, &MediaError{
+			Op:      "Creating new minIO buckets [originals]",
+			Code:    500,
+			Message: "ERR, tell your REQ-ID code to our support",
+			Err:     err,
+		}
+	}
+	if res == false {
+		minioClient.MakeBucket(ctx, OriginalBucket, minio.MakeBucketOptions{})
+	}
+	return minioClient, nil
 }

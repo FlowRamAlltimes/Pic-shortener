@@ -1,17 +1,14 @@
 services:
   pic-backend:
-
     build: .
-
     container_name: pic-service
-
     depends_on:
       postgres-db:
         condition: service_healthy
-        
+      minIO:
+        condition: service_started
     ports:
       - 10000:10000
-
     volumes:
       - ./main.db:/app/main.db
       - ./storage:/app/storage
@@ -20,10 +17,8 @@ services:
     image: postgres:16-alpine
     container_name: postgre-db
     restart: always
-
     ports:
       - 5432:5432
-
     env_file:
       - .env
     environment:
@@ -38,25 +33,41 @@ services:
       timeout: 5s
       retries: 5
   prometheus:
-
+    # Берем последний образ с докерхаба
     image: prom/prometheus:latest
     container_name: prom-service
-
     ports:
       - 9090:9090
-
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
-
   grafana:
     image: grafana/grafana:latest
     container_name: grafana-service
-
     ports:
       - 3000:3000
-
     volumes:
       - grafana-storage:/var/lib/grafana
+  minIO:
+    image: minio/minio:latest
+    container_name: minio-storage
+    ports:
+      - 9000:9000
+      - 9001:9001
+    env_file:
+      - .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+    healthcheck:
+      test: ["CMD", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    restart: always
 volumes:
   grafana-storage:
   postgres_data:
+  minio_data:

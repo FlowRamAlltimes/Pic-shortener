@@ -1,11 +1,10 @@
 # Pic-shortener
 
-A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG images, equipped with a full monitoring stack (Prometheus + Grafana).
+A simple stateless REST API built in Go for uploading, dynamic resizing, and caching JPEG, PNG and WebP images, equipped with a full monitoring stack (Prometheus + Grafana).
 
 ## Arch
 
-<img width="1118" height="660" alt="image" src="https://github.com/user-attachments/assets/8b2417e2-a486-4aea-9475-d952ed8412f0" />
-
+<img width="849" height="520" alt="image" src="https://github.com/user-attachments/assets/25d9b355-31db-43dd-b531-869129b4b3c0" />
 
 ## Features
 
@@ -13,6 +12,7 @@ A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG 
 - **Dynamic Resizing:** Request images with custom width and quality parameters via `GET` requests.
 - **In-Memory Caching:** Fast response times for duplicate requests using an in-memory cache with thread-safe `sync.RWMutex`.
 - **Monitoring:** Built-in Prometheus metrics handler tracking Go runtime states and custom application behavior (cache hits and request durations).
+- **Storage:** S3 storage which provides the possibility to make simple CDN service and group some services
 
 ## Tech Stack
 
@@ -20,6 +20,7 @@ A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG 
 - **Database:** PostgreSQL
 - **Monitoring:** Prometheus & Grafana
 - **Infrastructure:** Docker & Docker Compose
+- **Storage:** MinIO S3 API
 
 ## Getting Started
 
@@ -43,9 +44,15 @@ Once running, the following services will be available:
 
     Go Backend API: http://localhost:10000
 
+    PostgeSQL Database: http://localhost:5432
+
     Prometheus UI: http://localhost:9090
 
     Grafana Dashboards: http://localhost:3000
+
+    MinIO Storage Client: http://localhost:9000
+
+    MinIO Storage UI: http://localhost:9001
 
 API Endpoints
 1. Upload Image
@@ -68,20 +75,24 @@ API Endpoints
 
     Query Parameters:
 
-        hash: The unique hash of the uploaded image.
+   * hash: The unique hash of the uploaded image.
 
-        width: Target width in pixels.
+   * width: Target width in pixels.
 
-        quality: JPEG quality (1-100).
+   * quality: JPEG quality (1-100).
 
-    Response: The processed JPEG image.
+   * format: webp, jpeg or png
 
-3. Metrics
+    Response: The processed WebP, PNG or JPEG image.
+
+4. Metrics
 
     URL: /metrics
 
     Method: GET
 
     Description: Exposes standard Go runtime metrics and custom application metrics for Prometheus scraping.
-# Grafana Dashboard
-<img width="1524" height="818" alt="image" src="https://github.com/user-attachments/assets/e99c6f09-fa1f-471c-a187-8bb58d98d735" />
+# Grafana Result Example
+<img width="1849" height="1029" alt="image" src="https://github.com/user-attachments/assets/befebe59-e1b5-49fa-b630-6f5c77af96e2" />
+
+

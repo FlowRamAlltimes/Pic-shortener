@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"os"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minio/minio-go/v7"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -30,6 +33,7 @@ type MainConfig struct {
 	Server   ServerConfig   `yaml:"server"`
 	Database DBConfig       `yaml:"database"`
 	Postgres PostgresConfig `yaml:"postgres"`
+	MinIO    MinIOEnv       `yaml:"minio"`
 }
 
 type ServerConfig struct {
@@ -40,10 +44,7 @@ type ServerConfig struct {
 }
 
 type DBConfig struct {
-	StoragePath  string `yaml:"originals_path"`
-	CachedPath   string `yaml:"cached_path"`
-	TempFilePath string `yaml:"temp_file_path"`
-	LogFilePath  string `yaml:"app_logs_path"`
+	LogFilePath string `yaml:"app_logs_path"`
 }
 
 type PostgresConfig struct {
@@ -53,10 +54,14 @@ type PostgresConfig struct {
 	User     string `yaml:"user"`
 }
 
-var (
-	Cfg  *MainConfig
-	Path string
-)
+type MinIOEnv struct {
+	minioClient     *minio.Client
+	CachedBucket    string `yaml:"cached_bucket"`
+	OriginalBucket  string `yaml:"originals_bucket"`
+	Endpoint        string `yaml:"endpoint"`
+	AccessKeyID     string `yaml:"access_key_id"`
+	SecretAccessKey string `yaml:"secret_access_key"`
+}
 
 type ctxKey string
 
@@ -67,6 +72,7 @@ var (
 	AlreadyDone    map[string]string // it like map[hash:quality:width]filepath to use already cashed images
 	err            error
 	mu             sync.RWMutex
+	Cfg            *MainConfig
 	cacheHitsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "pic_shortener_cached_hits_total",
 		Help: "counter when map AlreadyDone saved server resources",
@@ -90,6 +96,8 @@ var (
 )
 
 func main() {
+	postgreCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
 
 	fmt.Print(`
  ██████╗ ██╗ ██████╗    ███████╗███████╗██████╗ ██╗   ██╗██╗ ██████╗███████╗
@@ -102,13 +110,6 @@ func main() {
  >> Production server is up and running...
 `)
 
-	postgreCtx, stop := context.WithTimeout(context.Background(), 2*time.Second)
-	defer stop()
-
-	quit := make(chan os.Signal, 1)
-
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-
 	Cfg, err = UnparseYAML("config.yml")
 	if errors.Is(err, os.ErrNotExist) {
 		log.Printf("File does not exist! %v\n", err)
@@ -117,6 +118,33 @@ func main() {
 		log.Println(err)
 		return
 	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	slog.SetDefault(logger)
+
+	var customErr *core.MediaError
+
+	client, err := core.InitMinIO(postgreCtx, Cfg.MinIO.CachedBucket, Cfg.MinIO.OriginalBucket, Cfg.MinIO.Endpoint, Cfg.MinIO.AccessKeyID, Cfg.MinIO.SecretAccessKey, false)
+	if errors.As(err, &customErr) {
+		slog.Error(customErr.Op, "message", customErr.Message, "err", customErr.Err)
+		return
+	}
+
+	env := &MinIOEnv{
+		minioClient:     client,
+		CachedBucket:    Cfg.MinIO.CachedBucket,
+		OriginalBucket:  Cfg.MinIO.OriginalBucket,
+		Endpoint:        Cfg.MinIO.Endpoint,
+		AccessKeyID:     Cfg.MinIO.AccessKeyID,
+		SecretAccessKey: Cfg.MinIO.SecretAccessKey,
+	}
+
+	quit := make(chan os.Signal, 1)
+
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
 	logFile, err := os.OpenFile(Cfg.Database.LogFilePath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0666)
 	if errors.Is(err, os.ErrNotExist) {
@@ -133,9 +161,6 @@ func main() {
 	log.SetOutput(mw)
 
 	log.Printf("Log system is running now\n")
-
-	var PrePath string = Cfg.Database.StoragePath
-	Path = PrePath
 
 	var dbError *database.DBError
 
@@ -159,7 +184,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	server := &http.Server{
-		Handler:      LogMiddleware(mux),
+		Handler:      env.LogMiddleware(mux),
 		Addr:         Cfg.Server.Port,
 		ReadTimeout:  Cfg.Server.Read,
 		IdleTimeout:  Cfg.Server.Idle,
@@ -167,7 +192,7 @@ func main() {
 	}
 
 	mux.HandleFunc("/", mainHandler)
-	mux.HandleFunc("/images", imageHandler)
+	mux.HandleFunc("/images", env.imageHandler)
 	mux.Handle("/metrics", promhttp.Handler())
 	log.Printf("Service runs: %s", server.Addr)
 
@@ -187,12 +212,16 @@ func main() {
 	defer stop()
 
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("Service has been stopped: %v", err)
+		log.Fatalf("ERR %v", err)
 	}
+
+	log.Printf("Service has been stopped successfully!")
 }
 
-func imageHandler(w http.ResponseWriter, r *http.Request) {
-	postgreCtx := r.Context()
+func (env *MinIOEnv) imageHandler(w http.ResponseWriter, r *http.Request) {
+	postgreCtx, stop := context.WithTimeout(r.Context(), 3*time.Second)
+	defer stop()
+
 	ip := r.RemoteAddr
 
 	reqID, _ := r.Context().Value(requestIdKey).(string)
@@ -203,24 +232,51 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash") // gets all data from get query
 		width := r.URL.Query().Get("width")
 		quality := r.URL.Query().Get("quality")
+		format := r.URL.Query().Get("format")
+
+		slog.Debug("Format of query", "req_id", reqID, "format", format)
 
 		var foundPath string
 
-		queryForMap := fmt.Sprintf("%s:%s:%s", hash, quality, width)
+		queryForMap := fmt.Sprintf("%s_%s_%s_%s", hash, width, quality, format)
 
 		mu.RLock()
-		val, exists := AlreadyDone[queryForMap]
-		if exists == true { // checks existing
+		_, exists := AlreadyDone[queryForMap] // val = bucket
+		mu.RUnlock()
+		if exists == true {
+			objectName := fmt.Sprintf("%s_%s_%s_%s", hash, width, quality, format)
+			obj, err := env.minioClient.GetObject(postgreCtx, env.CachedBucket, objectName, minio.GetObjectOptions{})
+			if err != nil {
+				slog.Error("ERR at getting object", "req_id", reqID, "err", err)
+				http.Error(w, "Unexpected error, tell your REQ-ID to our support", 500)
+				return
+			}
+			defer obj.Close()
+
+			info, err := obj.Stat()
+			if err != nil {
+				slog.Error("ERR at getting stat from object", "req_id", reqID, "err", err)
+				http.Error(w, "Unexpected error, tell your REQ-ID to our support", http.StatusInternalServerError)
+				return
+			}
+
+			w.Header().Set("Content-Type", "image/"+format)
+			w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
+			w.WriteHeader(http.StatusOK)
+
+			if _, err = io.Copy(w, obj); err != nil {
+				slog.Error("ERR at copying data", "req_id", reqID, "err", err)
+				http.Error(w, "Unexpected error, tell your REQ-ID to our support", 500)
+			}
+
 			cacheHitsTotal.Inc() // adds 1 to global prometheus counter
-			foundPath = val
-			http.ServeFile(w, r, foundPath)
-			mu.RUnlock()
+			successfulTotals.Inc()
+
+			slog.Debug("We sent new cached image", "req_id", reqID, "err", err)
 			return
 		} else {
-			reference := fmt.Sprintf("storage/originals/%v.jpg", hash)
-			foundPath = reference
+			foundPath = hash
 		}
-		mu.RUnlock()
 
 		qual, err := strconv.Atoi(quality)
 		if err != nil {
@@ -249,17 +305,13 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		id := strconv.Itoa(original_id)
 
-		preDestPath := Cfg.Database.CachedPath
-
-		preDestPathCashed := fmt.Sprintf("%s/%s", preDestPath, hash)
-
-		dstPath := fmt.Sprintf("%s_%vX%v.jpg", preDestPathCashed, width, quality)
+		targetObject := fmt.Sprintf("%s_%v_%v_%v", hash, width, quality, format)
 
 		var MediaErr *core.MediaError
 
-		err = core.ResizeJPEG(foundPath, dstPath, wid, qual)
+		buf, formatNew, err := core.ResizeImage(postgreCtx, foundPath, hash, env.OriginalBucket, wid, qual, env.minioClient, format) // formatNew = format, its just for understanding
 		if err == nil {
-			log.Printf("We made new cashed image: %v\n", dstPath)
+			log.Printf("We made new cashed image: %v\n", targetObject)
 		} else {
 			if errors.As(err, &MediaErr) {
 				errorsOfService.Inc()
@@ -268,21 +320,37 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		opts := minio.PutObjectOptions{
+			ContentType: "image/" + format,
+		}
 
-		http.ServeFile(w, r, dstPath) // sends file to the client
-		log.Printf("We sent new shortcuted image to [%s]\n", ip)
+		if _, err = env.minioClient.PutObject(postgreCtx, env.CachedBucket, targetObject, bytes.NewReader(buf), int64(len(buf)), opts); err != nil {
+			slog.Error("ERR at saving data into storage", "req_id", reqID, "err", err)
+			http.Error(w, "Unexpected error, tell your REQ-ID to our support", 500)
+			return
+		}
 
-		err = database.SaveCashedAfterGetRequest(postgreCtx, id, width, quality, dstPath, int(time.Now().Unix()))
+		slog.Debug("We sent newly optimized image", "req_id", reqID)
+
+		err = database.SaveCashedAfterGetRequest(postgreCtx, id, width, quality, targetObject, formatNew, int(time.Now().Unix()))
 		if errors.As(err, &dbError) {
 			errorsOfService.Inc()
 			log.Printf("ERR [%s] %v\n", reqID, dbError.Error())
 			return
 		}
 
-		key := fmt.Sprintf("%v:%v:%v", hash, quality, width)
+		key := fmt.Sprintf("%v_%v_%v_%v", hash, width, quality, format)
 		mu.Lock()
-		AlreadyDone[key] = dstPath
+		AlreadyDone[key] = env.CachedBucket
 		mu.Unlock()
+
+		w.Header().Set("Content-Type", "image/"+format)
+		w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(buf)
+
+		successfulTotals.Inc()
+
 	} else if r.Method == http.MethodPost {
 		r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 
@@ -294,10 +362,10 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		network, _, err := r.FormFile("image")
+		network, _, err := r.FormFile("image") // gets all formed data from 'image' block
 		if err != nil {
 			errorsOfService.Inc()
-			log.Printf("ERR at forming network file [%s] %v\n", reqID, err)
+			slog.Error("ERR at forming file by keyword", "req_iq", reqID, "err", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -305,20 +373,13 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		hasher := sha256.New()
 
-		tempfile, err := os.Create(Cfg.Database.TempFilePath)
-		if err != nil {
-			errorsOfService.Inc()
-			log.Printf("ERR at creating temp file [%s] %v\n", reqID, err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer tempfile.Close()
+		var buf bytes.Buffer
 
-		mw := io.MultiWriter(tempfile, hasher)
+		mw := io.MultiWriter(&buf, hasher)
 
 		var mediaErr *core.MediaError
 
-		stream, err := core.Detector(network)
+		stream, format, err := core.Detector(network)
 		if errors.As(err, &mediaErr) {
 			errorsOfService.Inc()
 			log.Printf("ERR for admin: [%s] %v\n", reqID, mediaErr.Error())
@@ -336,22 +397,24 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		hashString := fmt.Sprintf("%x", hasher.Sum(nil))
 
-		fp := fmt.Sprintf(Path+"/%s.jpg", hashString)
-		err = os.Rename(Cfg.Database.TempFilePath, fp)
-		if err != nil {
-			errorsOfService.Inc()
-			log.Printf("ERR at renaming temp file [%s] %v\n", reqID, err)
+		opts := minio.PutObjectOptions{
+			ContentType: "image/" + format,
+		}
+
+		if _, err = env.minioClient.PutObject(postgreCtx, env.OriginalBucket, hashString, &buf, int64(buf.Len()), opts); err != nil {
+			slog.Error("ERR at putting object in the minIO storage after post request", "req_id", reqID, "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		var dbError *database.DBError
 
-		err = database.SaveOriginalAfterPostRequest(postgreCtx, hashString, fp, int(time.Now().Unix()))
+		err = database.SaveOriginalAfterPostRequest(postgreCtx, hashString, format, int(time.Now().Unix()))
 		if err == nil {
-			log.Printf("New picture by [%s]: %s\n", reqID, fp)
+			log.Printf("New picture by [%s]: %s\n", reqID, hashString)
 			mu.Lock()
-			AlreadyDone[hashString+":"+"original-quality"+":"+"original-width"] = fp
+			keyword := fmt.Sprint(hashString + ":" + "original-quality" + ":" + "original-width" + ":" + format)
+			AlreadyDone[keyword] = env.OriginalBucket
 			mu.Unlock()
 		} else if errors.As(err, &dbError) {
 			errorsOfService.Inc()
@@ -362,6 +425,8 @@ func imageHandler(w http.ResponseWriter, r *http.Request) {
 
 		successfulTotals.Inc() // prometheus metric
 
+		w.Header().Set("Content-Type", "image/"+format)
+		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("File has been saved successfully! HASH: " + hashString + "\n"))
 	} else {
 		errorsOfService.Inc()
@@ -375,7 +440,7 @@ func mainHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello, thats my API to optimize your photos")
 }
 
-func LogMiddleware(nextFunc http.Handler) http.Handler {
+func (env *MinIOEnv) LogMiddleware(nextFunc http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := r.RemoteAddr
 		start := time.Now().Round(time.Millisecond)
