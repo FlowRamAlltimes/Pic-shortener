@@ -4,7 +4,7 @@ A simple REST API built in Go for uploading, dynamic resizing, and caching JPEG,
 
 ## Arch
 
-<img width="1118" height="660" alt="image" src="https://github.com/user-attachments/assets/8b2417e2-a486-4aea-9475-d952ed8412f0" />
+<img width="849" height="479" alt="image" src="https://github.com/user-attachments/assets/786793b9-b845-442e-b76a-a183b65a368d" />
 
 
 ## Features
